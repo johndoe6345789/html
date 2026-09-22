@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Air Hockey</title>
+<style>
+  :root {
+    --room: #101216;
+    --room-2: #1A1E24;
+    --ink: #EDF0F3;
+    --ink-dim: #949CA6;
+    --red: #C8362F;
+    --blue: #1E5BA8;
+    --card: #F2F4F6;
+    --card-ink: #14181B;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(130% 75% at 50% 0%, var(--room-2) 0%, var(--room) 72%);
+    color: var(--ink);
+    font-family: "Helvetica Neue", Helvetica, Roboto, Arial, sans-serif;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app { height: 100%; display: flex; flex-direction: column; }
+
+  .scorebar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px 6px;
+    flex: none;
+  }
+  .side { display: flex; align-items: center; gap: 9px; }
+  .side.them { justify-content: flex-end; }
+  .card {
+    min-width: 52px;
+    padding: 5px 10px 7px;
+    border-radius: 4px;
+    background: var(--card);
+    color: var(--card-ink);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 3px 0 rgba(0,0,0,.4);
+  }
+  .card.mine { box-shadow: 0 3px 0 rgba(0,0,0,.4), inset 0 0 0 2px var(--red); }
+  .card.theirs { box-shadow: 0 3px 0 rgba(0,0,0,.4), inset 0 0 0 2px var(--blue); }
+  .who { font-size: 13px; color: var(--ink-dim); }
+
+  .controls { display: flex; gap: 6px; }
+  .icon {
+    width: 38px; height: 38px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(237,240,243,.18);
+    border-radius: 8px;
+    background: rgba(237,240,243,.04);
+    color: var(--ink);
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .icon:active { background: rgba(237,240,243,.12); }
+  .icon:disabled { opacity: .35; }
+  .icon:focus-visible, .btn:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+  .rink { position: relative; flex: 1 1 auto; min-height: 0; }
+  canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+
+  .overlay {
+    position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 14px; padding: 24px;
+    text-align: center;
+    background: rgba(10,13,17,.74);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.5px; }
+  .overlay p { margin: 0; max-width: 30ch; font-size: 15px; line-height: 1.5; color: var(--ink-dim); }
+  .btn {
+    margin-top: 4px;
+    padding: 13px 30px;
+    border: none; border-radius: 999px;
+    background: var(--red); color: #FFF4F2;
+    font-family: inherit; font-size: 17px; font-weight: 700;
+    cursor: pointer;
+  }
+  .btn:active { transform: translateY(1px); }
+  .hint { padding: 6px 14px 10px; text-align: center; font-size: 13px; color: var(--ink-dim); flex: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="scorebar">
+    <div class="side mine">
+      <div class="card mine" id="scoreYou">0</div>
+      <div class="who">You</div>
+    </div>
+    <div class="controls">
+      <button class="icon" id="mute" aria-label="Turn sound off">♪</button>
+      <button class="icon" id="pause" aria-label="Pause" disabled>❙❙</button>
+    </div>
+    <div class="side them">
+      <div class="who">Opponent</div>
+      <div class="card theirs" id="scoreAi">0</div>
+    </div>
+  </div>
+
+  <div class="rink" id="rink">
+    <canvas id="board"></canvas>
+    <div class="overlay" id="overlay">
+      <h1 id="ovTitle">Air Hockey</h1>
+      <p id="ovText">First to seven goals. Drag your mallet anywhere in your half.</p>
+      <button class="btn" id="ovBtn">Start playing</button>
+    </div>
+  </div>
+
+  <div class="hint">Drag to move your mallet</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var WIN = 7;
+  var COL = {
+    rail: "#23262C", railEdge: "#33373E", slot: "#0B0D10",
+    ice: "#E7EBEF", iceEdge: "#D2D8DE",
+    red: "#C8362F", blue: "#1E5BA8",
+    puck: "#15171A"
+  };
+
+  var cv = document.getElementById("board");
+  var ctx = cv.getContext("2d");
+  var rink = document.getElementById("rink");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovText = document.getElementById("ovText");
+  var ovBtn = document.getElementById("ovBtn");
+  var elScoreYou = document.getElementById("scoreYou");
+  var elScoreAi = document.getElementById("scoreAi");
+  var btnPause = document.getElementById("pause");
+  var btnMute = document.getElementById("mute");
+
+  var phase = "menu";
+  var muted = false;
+  var score = { you: 0, ai: 0 };
+  var g = null;
+  var dpr = 1;
+  var dragging = false;
+  var dots = null;
+
+  // ---------- sound ----------
+  var actx = null;
+  function tone(freq, dur, type, vol) {
+    if (muted) return;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!actx) actx = new AC();
+      if (actx.state === "suspended") actx.resume();
+      var o = actx.createOscillator(), gn = actx.createGain();
+      o.type = type || "square";
+      o.frequency.value = freq;
+      gn.gain.setValueAtTime(vol || 0.06, actx.currentTime);
+      gn.gain.exponentialRampToValueAtTime(0.0008, actx.currentTime + dur);
+      o.connect(gn); gn.connect(actx.destination);
+      o.start();
+      o.stop(actx.currentTime + dur);
+    } catch (e) {}
+  }
+
+  // ---------- setup ----------
+  function makeGame(w, h) {
+    var rail = Math.max(10, Math.min(w * 0.045, 18));
+    var t = { x: rail, y: rail + 4, w: w - rail * 2, h: h - rail * 2 - 8 };
+    var goalW = Math.min(t.w * 0.42, t.w - 40);
+    var puckR = Math.max(11, t.w * 0.052);
+    var malletR = Math.max(19, t.w * 0.082);
+    return {
+      w: w, h: h, t: t, rail: rail,
+      goalW: goalW,
+      gx1: t.x + (t.w - goalW) / 2,
+      gx2: t.x + (t.w + goalW) / 2,
+      postR: Math.max(3, t.w * 0.013),
+      puckR: puckR,
+      malletR: malletR,
+      maxPuck: t.h * 1.55,
+      minPuck: t.h * 0.30,
+      aiSpeed: t.h * 0.80,
+      puck: { x: t.x + t.w / 2, y: t.y + t.h / 2, vx: 0, vy: 0 },
+      you: { x: t.x + t.w / 2, y: t.y + t.h * 0.80, tx: t.x + t.w / 2, ty: t.y + t.h * 0.80, vx: 0, vy: 0 },
+      ai: { x: t.x + t.w / 2, y: t.y + t.h * 0.16, vx: 0, vy: 0 },
+      aim: 0,
+      faceOff: 1.0,
+      towards: "ai",
+      flash: 0, flashSide: null
+    };
+  }
+
+  function makeDots() {
+    try {
+      var tile = document.createElement("canvas");
+      var s = 13;
+      tile.width = s; tile.height = s;
+      var c = tile.getContext("2d");
+      if (!c) return null;
+      c.fillStyle = "rgba(20,28,38,.13)";
+      c.beginPath();
+      c.arc(s / 2, s / 2, 1.1, 0, Math.PI * 2);
+      c.fill();
+      return ctx.createPattern(tile, "repeat");
+    } catch (e) { return null; }
+  }
+
+  function resize() {
+    var w = rink.clientWidth, h = rink.clientHeight;
+    if (!w || !h) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    var keep = g ? { towards: g.towards } : null;
+    g = makeGame(w, h);
+    if (keep) g.towards = keep.towards;
+    dots = makeDots();
+    faceOff(g.towards);
+  }
+
+  function faceOff(towards) {
+    g.towards = towards;
+    g.puck.x = g.t.x + g.t.w / 2;
+    g.puck.y = g.t.y + g.t.h / 2 + (towards === "ai" ? g.t.h * 0.10 : -g.t.h * 0.10);
+    g.puck.vx = 0; g.puck.vy = 0;
+    g.faceOff = 1.0;
+    g.you.x = g.t.x + g.t.w / 2;
+    g.you.y = g.t.y + g.t.h * 0.80;
+    g.you.tx = g.you.x; g.you.ty = g.you.y;
+    g.ai.x = g.t.x + g.t.w / 2;
+    g.ai.y = g.t.y + g.t.h * 0.16;
+  }
+
+  // ---------- ui ----------
+  function paintUI() {
+    elScoreYou.textContent = score.you;
+    elScoreAi.textContent = score.ai;
+    btnPause.disabled = (phase === "menu" || phase === "over");
+    btnPause.textContent = phase === "playing" ? "❙❙" : "▶";
+    btnPause.setAttribute("aria-label", phase === "playing" ? "Pause" : "Resume");
+    btnMute.textContent = muted ? "✕" : "♪";
+    btnMute.setAttribute("aria-label", muted ? "Turn sound on" : "Turn sound off");
+
+    if (phase === "playing") {
+      overlay.className = "overlay hidden";
+      return;
+    }
+    overlay.className = "overlay";
+    if (phase === "menu") {
+      ovTitle.textContent = "Air Hockey";
+      ovText.textContent = "First to seven goals. Drag your mallet anywhere in your half.";
+      ovBtn.textContent = "Start playing";
+    } else if (phase === "paused") {
+      ovTitle.textContent = "Paused";
+      ovText.textContent = score.you + " – " + score.ai;
+      ovBtn.textContent = "Resume";
+    } else {
+      ovTitle.textContent = score.you > score.ai ? "You win" : "Opponent wins";
+      ovText.textContent = score.you + " – " + score.ai;
+      ovBtn.textContent = "Play again";
+    }
+  }
+
+  function startMatch() {
+    score.you = 0; score.ai = 0;
+    faceOff("ai");
+    phase = "playing";
+    tone(640, 0.07);
+    paintUI();
+  }
+
+  function goal(who) {
+    score[who] += 1;
+    g.flash = 1;
+    g.flashSide = who === "you" ? "ai" : "you";
+    tone(who === "you" ? 520 : 150, 0.35, "sawtooth", 0.07);
+    if (score.you >= WIN || score.ai >= WIN) {
+      phase = "over";
+      paintUI();
+      return;
+    }
+    faceOff(who === "you" ? "you" : "ai");
+    paintUI();
+  }
+
+  // ---------- physics ----------
+  function speedOf(o) { return Math.sqrt(o.vx * o.vx + o.vy * o.vy); }
+
+  function capPuck() {
+    var p = g.puck, s = speedOf(p);
+    if (s > g.maxPuck) { p.vx = p.vx / s * g.maxPuck; p.vy = p.vy / s * g.maxPuck; }
+  }
+
+  function hitPost(px, py) {
+    var p = g.puck;
+    var dx = p.x - px, dy = p.y - py;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    var min = p_r() + g.postR;
+    if (d === 0 || d >= min) return;
+    var nx = dx / d, ny = dy / d;
+    p.x = px + nx * min;
+    p.y = py + ny * min;
+    var rv = p.vx * nx + p.vy * ny;
+    if (rv < 0) { p.vx -= 1.8 * rv * nx; p.vy -= 1.8 * rv * ny; }
+    tone(240, 0.05);
+  }
+
+  function p_r() { return g.puckR; }
+
+  function mallet(m, p, dt) {
+    var dx = p.x - m.x, dy = p.y - m.y;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    var min = g.puckR + g.malletR;
+    if (d === 0 || d >= min) return false;
+    var nx = dx / d, ny = dy / d;
+    p.x = m.x + nx * min;
+    p.y = m.y + ny * min;
+    var rvx = p.vx - m.vx, rvy = p.vy - m.vy;
+    var rv = rvx * nx + rvy * ny;
+    if (rv < 0) {
+      var e = 1.85;
+      p.vx -= e * rv * nx;
+      p.vy -= e * rv * ny;
+    }
+    // a struck puck always leaves with some pace
+    var s = speedOf(p);
+    if (s < g.minPuck) {
+      if (s < 1) { p.vx = nx * g.minPuck; p.vy = ny * g.minPuck; }
+      else { p.vx = p.vx / s * g.minPuck; p.vy = p.vy / s * g.minPuck; }
+    }
+    capPuck();
+    tone(200 + Math.min(320, speedOf(p) * 0.25), 0.05, "square", 0.05);
+    return true;
+  }
+
+  function inMouthX(x) {
+    return x > g.gx1 + g.postR && x < g.gx2 - g.postR;
+  }
+
+  // keep the puck on the table: a mallet must never shove it through a rail
+  function contain() {
+    var t = g.t, p = g.puck, r = g.puckR;
+    if (p.x < t.x + r) { p.x = t.x + r; if (p.vx < 0) p.vx = -p.vx * 0.94; }
+    if (p.x > t.x + t.w - r) { p.x = t.x + t.w - r; if (p.vx > 0) p.vx = -p.vx * 0.94; }
+    if (inMouthX(p.x)) return;
+    if (p.y < t.y + r) { p.y = t.y + r; if (p.vy < 0) p.vy = -p.vy * 0.94; }
+    if (p.y > t.y + t.h - r) { p.y = t.y + t.h - r; if (p.vy > 0) p.vy = -p.vy * 0.94; }
+  }
+
+  // if a mallet traps the puck, pop it to the nearest free spot around the mallet
+  function unwedge(m) {
+    var t = g.t, p = g.puck, r = g.puckR, min = r + g.malletR;
+    var dx = p.x - m.x, dy = p.y - m.y;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    if (d >= min - 0.01) return;
+    var minX = t.x + r, maxX = t.x + t.w - r;
+    var minY = t.y + r, maxY = t.y + t.h - r;
+    var best = null, bestD = Infinity, N = 24;
+    for (var a = 0; a < N; a++) {
+      var ang = a / N * Math.PI * 2;
+      var qx = m.x + Math.cos(ang) * (min + 0.5);
+      var qy = m.y + Math.sin(ang) * (min + 0.5);
+      if (qx < minX || qx > maxX) continue;
+      if ((qy < minY || qy > maxY) && !inMouthX(qx)) continue;
+      var dd = (qx - p.x) * (qx - p.x) + (qy - p.y) * (qy - p.y);
+      if (dd < bestD) { bestD = dd; best = [qx, qy, ang]; }
+    }
+    if (!best) return;
+    p.x = best[0];
+    p.y = best[1];
+    var sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+    var out = Math.max(sp, g.minPuck * 0.85);
+    p.vx = Math.cos(best[2]) * out;
+    p.vy = Math.sin(best[2]) * out;
+    capPuck();
+  }
+
+  function step(dt) {
+    var t = g.t, p = g.puck, r = g.puckR;
+    if (g.flash > 0) g.flash = Math.max(0, g.flash - dt * 1.6);
+
+    // your mallet chases your finger, kept in your own half
+    var k = Math.min(1, dt * 18);
+    var ox = g.you.x, oy = g.you.y;
+    g.you.x += (g.you.tx - g.you.x) * k;
+    g.you.y += (g.you.ty - g.you.y) * k;
+    g.you.x = Math.max(t.x + g.malletR, Math.min(t.x + t.w - g.malletR, g.you.x));
+    g.you.y = Math.max(t.y + t.h / 2 + g.malletR * 0.15, Math.min(t.y + t.h - g.malletR, g.you.y));
+    g.you.vx = (g.you.x - ox) / Math.max(dt, 0.0001);
+    g.you.vy = (g.you.y - oy) / Math.max(dt, 0.0001);
+
+    // opponent: defend the mouth, step out to clear the puck
+    var ax = g.ai.x, ay = g.ai.y;
+    var tx, ty;
+    var puckInTheirHalf = p.y < t.y + t.h / 2;
+    var aiPace = g.aiSpeed;
+    if (puckInTheirHalf && g.faceOff <= 0) {
+      // aim at the side of your goal you are leaving open
+      var mouthMid = t.x + t.w / 2;
+      var aimX = (g.you.x < mouthMid ? g.gx2 - g.goalW * 0.18 : g.gx1 + g.goalW * 0.18) + g.aim;
+      var aimY = t.y + t.h;
+      var ax2 = p.x - aimX, ay2 = p.y - aimY;
+      var ad = Math.sqrt(ax2 * ax2 + ay2 * ay2) || 1;
+      var reach = (g.malletR + g.puckR) * 0.88;
+      var bx = p.x + (ax2 / ad) * reach, by = p.y + (ay2 / ad) * reach;
+      var lined = Math.sqrt((g.ai.x - bx) * (g.ai.x - bx) + (g.ai.y - by) * (g.ai.y - by));
+      if (lined > g.malletR * 0.55) {
+        tx = bx; ty = by;                 // get in behind the puck
+      } else {
+        tx = aimX; ty = aimY;             // drive through it at the goal
+        aiPace = g.aiSpeed * 1.45;
+      }
+    } else {
+      tx = t.x + t.w / 2 + (p.x - (t.x + t.w / 2)) * 0.55;
+      ty = t.y + t.h * 0.14;
+      g.aim = (Math.random() * 2 - 1) * g.goalW * 0.30;   // fresh aim for the next attack
+    }
+    var mx = tx - g.ai.x, my = ty - g.ai.y;
+    var md = Math.sqrt(mx * mx + my * my);
+    var maxStep = aiPace * dt;
+    if (md > 0) {
+      var f = Math.min(1, maxStep / md);
+      g.ai.x += mx * f;
+      g.ai.y += my * f;
+    }
+    g.ai.x = Math.max(t.x + g.malletR, Math.min(t.x + t.w - g.malletR, g.ai.x));
+    g.ai.y = Math.max(t.y + g.malletR, Math.min(t.y + t.h / 2 - g.malletR * 0.15, g.ai.y));
+    g.ai.vx = (g.ai.x - ax) / Math.max(dt, 0.0001);
+    g.ai.vy = (g.ai.y - ay) / Math.max(dt, 0.0001);
+
+    if (g.faceOff > 0) {
+      g.faceOff -= dt;
+      return;
+    }
+
+    // glide
+    var damp = Math.pow(0.94, dt);
+    p.vx *= damp;
+    p.vy *= damp;
+
+    var dist = speedOf(p) * dt;
+    var steps = Math.max(1, Math.min(24, Math.ceil(dist / (r * 0.7))));
+    var sdt = dt / steps;
+
+    for (var i = 0; i < steps; i++) {
+      p.x += p.vx * sdt;
+      p.y += p.vy * sdt;
+
+      if (p.x - r < t.x) { p.x = t.x + r; p.vx = Math.abs(p.vx) * 0.94; tone(190, 0.04, "square", 0.04); }
+      if (p.x + r > t.x + t.w) { p.x = t.x + t.w - r; p.vx = -Math.abs(p.vx) * 0.94; tone(190, 0.04, "square", 0.04); }
+
+      var inMouth = inMouthX(p.x);
+
+      if (p.y - r < t.y) {
+        if (inMouth) {
+          if (p.y + r < t.y) { goal("you"); return; }
+        } else {
+          p.y = t.y + r; p.vy = Math.abs(p.vy) * 0.94; tone(190, 0.04, "square", 0.04);
+        }
+      }
+      if (p.y + r > t.y + t.h) {
+        if (inMouth) {
+          if (p.y - r > t.y + t.h) { goal("ai"); return; }
+        } else {
+          p.y = t.y + t.h - r; p.vy = -Math.abs(p.vy) * 0.94; tone(190, 0.04, "square", 0.04);
+        }
+      }
+
+      // goal posts
+      if (p.y < t.y + t.h * 0.2) { hitPost(g.gx1, t.y); hitPost(g.gx2, t.y); }
+      if (p.y > t.y + t.h * 0.8) { hitPost(g.gx1, t.y + t.h); hitPost(g.gx2, t.y + t.h); }
+
+      mallet(g.you, p, sdt);
+      mallet(g.ai, p, sdt);
+      contain();
+      unwedge(g.you);
+      unwedge(g.ai);
+      contain();
+    }
+  }
+
+  // ---------- drawing ----------
+  function roundRect(x, y, w, h, rad) {
+    var rr = Math.min(rad, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawMallet(x, y, r, col) {
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.beginPath();
+    ctx.arc(x + r * 0.10, y + r * 0.16, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(0,0,0,.28)";
+    ctx.lineWidth = Math.max(1.5, r * 0.10);
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.78, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.22)";
+    ctx.beginPath();
+    ctx.arc(x - r * 0.16, y - r * 0.20, r * 0.30, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function draw() {
+    var t = g.t, p = g.puck, r = g.puckR;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, g.w, g.h);
+
+    // cabinet rail
+    ctx.fillStyle = COL.rail;
+    roundRect(t.x - g.rail, t.y - g.rail, t.w + g.rail * 2, t.h + g.rail * 2, g.rail * 0.9);
+    ctx.fill();
+    ctx.strokeStyle = COL.railEdge;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // goal slots cut into the rail
+    ctx.fillStyle = COL.slot;
+    ctx.fillRect(g.gx1, t.y - g.rail, g.goalW, g.rail + 2);
+    ctx.fillRect(g.gx1, t.y + t.h - 2, g.goalW, g.rail + 2);
+
+    // playing surface
+    ctx.fillStyle = COL.ice;
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+    if (dots) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(t.x, t.y, t.w, t.h);
+      ctx.clip();
+      ctx.fillStyle = dots;
+      ctx.fillRect(t.x, t.y, t.w, t.h);
+      ctx.restore();
+    }
+    ctx.strokeStyle = COL.iceEdge;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1);
+
+    // markings
+    var lw = Math.max(2, t.w * 0.010);
+    ctx.strokeStyle = COL.red;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(t.x, t.y + t.h / 2);
+    ctx.lineTo(t.x + t.w, t.y + t.h / 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(t.x + t.w / 2, t.y + t.h / 2, t.w * 0.17, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = COL.blue;
+    ctx.lineWidth = lw * 0.9;
+    var creaseR = g.goalW * 0.62;
+    ctx.beginPath();
+    ctx.arc(t.x + t.w / 2, t.y, creaseR, 0.12 * Math.PI, 0.88 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(t.x + t.w / 2, t.y + t.h, creaseR, 1.12 * Math.PI, 1.88 * Math.PI);
+    ctx.stroke();
+
+    // goal mouths on the surface
+    ctx.strokeStyle = "rgba(11,13,16,.85)";
+    ctx.lineWidth = Math.max(3, lw * 1.4);
+    ctx.beginPath();
+    ctx.moveTo(g.gx1, t.y + 1); ctx.lineTo(g.gx2, t.y + 1);
+    ctx.moveTo(g.gx1, t.y + t.h - 1); ctx.lineTo(g.gx2, t.y + t.h - 1);
+    ctx.stroke();
+
+    // posts
+    ctx.fillStyle = "#E8E2D8";
+    [[g.gx1, t.y], [g.gx2, t.y], [g.gx1, t.y + t.h], [g.gx2, t.y + t.h]].forEach(function (q) {
+      ctx.beginPath();
+      ctx.arc(q[0], q[1], g.postR, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    if (g.flash > 0) {
+      ctx.fillStyle = "rgba(200,54,47," + (0.45 * g.flash) + ")";
+      var fy = g.flashSide === "you" ? t.y + t.h - 10 : t.y;
+      ctx.fillRect(g.gx1, fy, g.goalW, 10);
+    }
+
+    drawMallet(g.ai.x, g.ai.y, g.malletR, COL.blue);
+    drawMallet(g.you.x, g.you.y, g.malletR, COL.red);
+
+    // puck
+    ctx.fillStyle = "rgba(0,0,0,.32)";
+    ctx.beginPath();
+    ctx.ellipse(p.x + r * 0.16, p.y + r * 0.22, r, r * 0.92, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.puck;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+    ctx.lineWidth = Math.max(1, r * 0.09);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r * 0.62, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (g.faceOff > 0 && phase === "playing") {
+      ctx.fillStyle = "rgba(20,24,28,.6)";
+      ctx.font = "700 " + Math.round(t.w * 0.075) + "px Helvetica, Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Face off", t.x + t.w / 2, t.y + t.h / 2 - t.w * 0.22);
+    }
+  }
+
+  // ---------- loop ----------
+  var last = 0;
+  function tick(now) {
+    requestAnimationFrame(tick);
+    if (!g) return;
+    if (!last) last = now;
+    var dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (phase === "playing") step(dt);
+    else if (g.flash > 0) g.flash = Math.max(0, g.flash - dt * 1.6);
+    draw();
+  }
+
+  // ---------- input ----------
+  function aim(clientX, clientY) {
+    var rect = cv.getBoundingClientRect();
+    g.you.tx = clientX - rect.left;
+    g.you.ty = clientY - rect.top;
+  }
+  function pick(e) {
+    if (e.clientX !== undefined) return [e.clientX, e.clientY];
+    var tch = e.touches && e.touches[0];
+    return tch ? [tch.clientX, tch.clientY] : null;
+  }
+  function down(e) {
+    var pt = pick(e);
+    if (!pt) return;
+    dragging = true;
+    if (e.pointerId !== undefined && cv.setPointerCapture) {
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+    aim(pt[0], pt[1]);
+    e.preventDefault();
+  }
+  function move(e) {
+    if (!dragging) return;
+    var pt = pick(e);
+    if (!pt) return;
+    aim(pt[0], pt[1]);
+    e.preventDefault();
+  }
+  function up() { dragging = false; }
+
+  if (window.PointerEvent) {
+    cv.addEventListener("pointerdown", down);
+    cv.addEventListener("pointermove", move);
+    cv.addEventListener("pointerup", up);
+    cv.addEventListener("pointercancel", up);
+  } else {
+    cv.addEventListener("touchstart", down, { passive: false });
+    cv.addEventListener("touchmove", move, { passive: false });
+    cv.addEventListener("touchend", up);
+    cv.addEventListener("mousedown", down);
+    cv.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  ovBtn.addEventListener("click", function () {
+    if (phase === "playing") return;
+    if (phase === "paused") { phase = "playing"; paintUI(); return; }
+    startMatch();
+  });
+  btnPause.addEventListener("click", function () {
+    if (phase === "playing") phase = "paused";
+    else if (phase === "paused") phase = "playing";
+    paintUI();
+  });
+  btnMute.addEventListener("click", function () { muted = !muted; paintUI(); });
+
+  var held = {};
+  window.addEventListener("keydown", function (e) {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].indexOf(e.key) >= 0) { held[e.key] = true; e.preventDefault(); }
+    if (e.key === " " || e.key === "Enter") {
+      if (phase === "menu" || phase === "over") startMatch();
+      else if (phase === "playing") { phase = "paused"; paintUI(); }
+      else { phase = "playing"; paintUI(); }
+    }
+  });
+  window.addEventListener("keyup", function (e) { held[e.key] = false; });
+  setInterval(function () {
+    if (!g) return;
+    var s = g.t.w * 0.03;
+    if (held.ArrowLeft) g.you.tx -= s;
+    if (held.ArrowRight) g.you.tx += s;
+    if (held.ArrowUp) g.you.ty -= s;
+    if (held.ArrowDown) g.you.ty += s;
+  }, 16);
+
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", function () { setTimeout(resize, 200); });
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(resize).observe(rink); } catch (e) {}
+  }
+
+  resize();
+  paintUI();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

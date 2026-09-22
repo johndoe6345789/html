@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Table Tennis</title>
+<style>
+  :root {
+    --floor: #0E1317;
+    --floor-2: #161D22;
+    --ink: #EEF2F4;
+    --ink-dim: #93A3AD;
+    --ball: #E9722C;
+    --you: #C2352C;
+    --card: #F3F5F6;
+    --card-ink: #14181B;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(120% 80% at 50% 0%, var(--floor-2) 0%, var(--floor) 70%);
+    color: var(--ink);
+    font-family: "Helvetica Neue", Helvetica, Roboto, Arial, sans-serif;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app { height: 100%; display: flex; flex-direction: column; }
+
+  .scorebar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px 6px;
+    flex: none;
+  }
+  .side { display: flex; align-items: center; gap: 9px; }
+  .side.them { justify-content: flex-end; }
+  .card {
+    position: relative;
+    min-width: 52px;
+    padding: 4px 10px 6px;
+    border-radius: 5px;
+    background: var(--card);
+    color: var(--card-ink);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.05;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 3px 0 rgba(0,0,0,.35);
+  }
+  .card::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 50%;
+    height: 1px; background: rgba(0,0,0,.28);
+  }
+  .card.mine { box-shadow: 0 3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--you); }
+  .who { font-size: 13px; color: var(--ink-dim); }
+  .serve { width: 9px; height: 9px; border-radius: 50%; background: var(--ball); flex: none; visibility: hidden; }
+  .serve.on { visibility: visible; }
+
+  .controls { display: flex; gap: 6px; }
+  .icon {
+    width: 38px; height: 38px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(238,242,244,.18);
+    border-radius: 8px;
+    background: rgba(238,242,244,.04);
+    color: var(--ink);
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .icon:active { background: rgba(238,242,244,.12); }
+  .icon:disabled { opacity: .35; }
+  .icon:focus-visible, .btn:focus-visible { outline: 2px solid var(--ball); outline-offset: 2px; }
+
+  .court { position: relative; flex: 1 1 auto; min-height: 0; }
+  canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+
+  .overlay {
+    position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 14px; padding: 24px;
+    text-align: center;
+    background: rgba(9,13,16,.72);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.5px; }
+  .overlay p { margin: 0; max-width: 30ch; font-size: 15px; line-height: 1.5; color: var(--ink-dim); }
+  .btn {
+    margin-top: 4px;
+    padding: 13px 30px;
+    border: none; border-radius: 999px;
+    background: var(--ball); color: #1A0E06;
+    font-family: inherit; font-size: 17px; font-weight: 700;
+    cursor: pointer;
+  }
+  .btn:active { transform: translateY(1px); }
+  .hint { padding: 6px 14px 10px; text-align: center; font-size: 13px; color: var(--ink-dim); flex: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="scorebar">
+    <div class="side mine">
+      <div class="card mine" id="scoreYou">0</div>
+      <div class="who">You</div>
+      <div class="serve on" id="serveYou"></div>
+    </div>
+    <div class="controls">
+      <button class="icon" id="mute" aria-label="Turn sound off">♪</button>
+      <button class="icon" id="pause" aria-label="Pause" disabled>❙❙</button>
+    </div>
+    <div class="side them">
+      <div class="serve" id="serveAi"></div>
+      <div class="who">Opponent</div>
+      <div class="card" id="scoreAi">0</div>
+    </div>
+  </div>
+
+  <div class="court" id="court">
+    <canvas id="board"></canvas>
+    <div class="overlay" id="overlay">
+      <h1 id="ovTitle">Table Tennis</h1>
+      <p id="ovText">First to eleven, win by two. Drag anywhere to move your bat.</p>
+      <button class="btn" id="ovBtn">Start playing</button>
+    </div>
+  </div>
+
+  <div class="hint">Drag to move your bat</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var WIN = 11;
+  var COL = {
+    table: "#14496E", tableDeep: "#0F3A59", chalk: "#EEF2F4",
+    ball: "#E9722C", you: "#C2352C", them: "#17181B", wood: "#C08A4E"
+  };
+
+  var cv = document.getElementById("board");
+  var ctx = cv.getContext("2d");
+  var court = document.getElementById("court");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovText = document.getElementById("ovText");
+  var ovBtn = document.getElementById("ovBtn");
+  var elScoreYou = document.getElementById("scoreYou");
+  var elScoreAi = document.getElementById("scoreAi");
+  var elServeYou = document.getElementById("serveYou");
+  var elServeAi = document.getElementById("serveAi");
+  var btnPause = document.getElementById("pause");
+  var btnMute = document.getElementById("mute");
+
+  var phase = "menu";          // menu | playing | paused | over
+  var muted = false;
+  var score = { you: 0, ai: 0 };
+  var g = null;
+  var dpr = 1;
+  var dragging = false;
+
+  // ---------- audio ----------
+  var actx = null;
+  function blip(freq, dur, type) {
+    if (muted) return;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!actx) actx = new AC();
+      if (actx.state === "suspended") actx.resume();
+      var o = actx.createOscillator(), gn = actx.createGain();
+      o.type = type || "square";
+      o.frequency.value = freq;
+      gn.gain.setValueAtTime(0.06, actx.currentTime);
+      gn.gain.exponentialRampToValueAtTime(0.0008, actx.currentTime + dur);
+      o.connect(gn); gn.connect(actx.destination);
+      o.start();
+      o.stop(actx.currentTime + dur);
+    } catch (e) {}
+  }
+
+  // ---------- setup ----------
+  function makeGame(w, h, server) {
+    var m = Math.min(w * 0.05, 20);
+    var t = { x: m, y: m + 4, w: w - 2 * m, h: h - 2 * m - 8 };
+    return {
+      w: w, h: h, t: t,
+      batW: Math.max(46, t.w * 0.22),
+      batH: Math.max(13, t.h * 0.024),
+      r: Math.max(5, t.w * 0.028),
+      youY: t.y + t.h - t.h * 0.085,
+      aiY: t.y + t.h * 0.085,
+      base: t.h * 0.60,
+      speed: t.h * 0.60,
+      aiSpeed: t.h * 0.58,
+      you: { x: t.x + t.w / 2, target: t.x + t.w / 2, v: 0 },
+      ai: { x: t.x + t.w / 2, err: 0 },
+      ball: { x: t.x + t.w / 2, y: t.y + t.h / 2, vx: 0, vy: 0, py: 0 },
+      serveIn: 1.0,
+      server: server || "you",
+      flash: 0, flashSide: null
+    };
+  }
+
+  function resize() {
+    var w = court.clientWidth, h = court.clientHeight;
+    if (!w || !h) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    g = makeGame(w, h, g ? g.server : "you");
+    placeServe();
+  }
+
+  function placeServe() {
+    var sx = g.server === "you" ? g.you.x : g.ai.x;
+    g.ball.x = sx;
+    g.ball.y = g.server === "you" ? g.youY - g.r - 2 : g.aiY + g.batH + g.r + 2;
+    g.ball.py = g.ball.y;
+    g.ball.vx = 0;
+    g.ball.vy = 0;
+    g.ai.err = (Math.random() * 2 - 1) * g.batW * 0.42;
+  }
+
+  function launch() {
+    var dir = g.server === "you" ? -1 : 1;
+    var a = Math.random() * 0.5 - 0.25;
+    g.ball.vx = Math.sin(a) * g.speed;
+    g.ball.vy = dir * Math.cos(a) * g.speed;
+    blip(520, 0.05);
+  }
+
+  function nextServer(a, b) {
+    var total = a + b;
+    if (a >= 10 && b >= 10) return total % 2 === 0 ? "you" : "ai";
+    return Math.floor(total / 2) % 2 === 0 ? "you" : "ai";
+  }
+
+  // ---------- ui ----------
+  function paintUI() {
+    elScoreYou.textContent = score.you;
+    elScoreAi.textContent = score.ai;
+    if (g) {
+      elServeYou.className = "serve" + (g.server === "you" ? " on" : "");
+      elServeAi.className = "serve" + (g.server === "ai" ? " on" : "");
+    }
+    btnPause.disabled = (phase === "menu" || phase === "over");
+    btnPause.textContent = phase === "playing" ? "❙❙" : "▶";
+    btnPause.setAttribute("aria-label", phase === "playing" ? "Pause" : "Resume");
+    btnMute.textContent = muted ? "✕" : "♪";
+    btnMute.setAttribute("aria-label", muted ? "Turn sound on" : "Turn sound off");
+
+    if (phase === "playing") {
+      overlay.className = "overlay hidden";
+    } else {
+      overlay.className = "overlay";
+      if (phase === "menu") {
+        ovTitle.textContent = "Table Tennis";
+        ovText.textContent = "First to eleven, win by two. Drag anywhere to move your bat.";
+        ovBtn.textContent = "Start playing";
+      } else if (phase === "paused") {
+        ovTitle.textContent = "Paused";
+        ovText.textContent = score.you + " – " + score.ai;
+        ovBtn.textContent = "Resume";
+      } else {
+        ovTitle.textContent = score.you > score.ai ? "You win" : "Opponent wins";
+        ovText.textContent = score.you + " – " + score.ai;
+        ovBtn.textContent = "Play again";
+      }
+    }
+  }
+
+  function startMatch() {
+    score.you = 0; score.ai = 0;
+    g.server = "you";
+    g.speed = g.base;
+    g.serveIn = 1.1;
+    placeServe();
+    phase = "playing";
+    blip(600, 0.06);
+    paintUI();
+  }
+
+  function point(who) {
+    score[who] += 1;
+    g.flash = 1;
+    g.flashSide = who === "you" ? "ai" : "you";
+    blip(who === "you" ? 660 : 180, 0.18, "triangle");
+    if ((score.you >= WIN || score.ai >= WIN) && Math.abs(score.you - score.ai) >= 2) {
+      phase = "over";
+      paintUI();
+      return;
+    }
+    g.server = nextServer(score.you, score.ai);
+    g.speed = g.base;
+    g.serveIn = 1.0;
+    placeServe();
+    paintUI();
+  }
+
+  // ---------- physics ----------
+  function hit(batX, dir, batV) {
+    var b = g.ball;
+    var off = Math.max(-1, Math.min(1, (b.x - batX) / (g.batW / 2)));
+    g.speed = Math.min(g.speed * 1.04, g.base * 1.85);
+    var spin = Math.max(-0.25, Math.min(0.25, batV / (g.t.w * 6)));
+    var a = Math.max(-1.05, Math.min(1.05, off * 0.95 + spin));
+    b.vx = Math.sin(a) * g.speed;
+    b.vy = dir * Math.cos(a) * g.speed;
+    g.ai.err = (Math.random() * 2 - 1) * g.batW * 0.42;
+    blip(dir === -1 ? 440 : 380, 0.045);
+  }
+
+  function step(dt) {
+    var t = g.t, b = g.ball;
+    if (g.flash > 0) g.flash = Math.max(0, g.flash - dt * 2);
+
+    var k = Math.min(1, dt * 20);
+    var prevX = g.you.x;
+    g.you.x += (g.you.target - g.you.x) * k;
+    g.you.x = Math.max(t.x + g.batW / 2, Math.min(t.x + t.w - g.batW / 2, g.you.x));
+    g.you.v = (g.you.x - prevX) / Math.max(dt, 0.0001);
+
+    var aiTarget = (b.vy < 0 && g.serveIn <= 0)
+      ? b.x + g.ai.err
+      : t.x + t.w / 2 + g.ai.err * 0.3;
+    var maxStep = g.aiSpeed * dt;
+    var d = aiTarget - g.ai.x;
+    g.ai.x += Math.max(-maxStep, Math.min(maxStep, d));
+    g.ai.x = Math.max(t.x + g.batW / 2, Math.min(t.x + t.w - g.batW / 2, g.ai.x));
+
+    if (g.serveIn > 0) {
+      g.serveIn -= dt;
+      var sx = g.server === "you" ? g.you.x : g.ai.x;
+      b.x = sx;
+      b.y = g.server === "you" ? g.youY - g.r - 2 : g.aiY + g.batH + g.r + 2;
+      b.py = b.y;
+      if (g.serveIn <= 0) launch();
+      return;
+    }
+
+    var dist = Math.sqrt(b.vx * b.vx + b.vy * b.vy) * dt;
+    var steps = Math.max(1, Math.ceil(dist / (g.r * 0.8)));
+    var sdt = dt / steps;
+
+    for (var i = 0; i < steps; i++) {
+      b.py = b.y;
+      b.x += b.vx * sdt;
+      b.y += b.vy * sdt;
+
+      if (b.x - g.r < t.x) { b.x = t.x + g.r; b.vx = Math.abs(b.vx); blip(300, 0.03); }
+      if (b.x + g.r > t.x + t.w) { b.x = t.x + t.w - g.r; b.vx = -Math.abs(b.vx); blip(300, 0.03); }
+
+      if (b.vy > 0 && b.py + g.r <= g.youY && b.y + g.r >= g.youY &&
+          Math.abs(b.x - g.you.x) <= g.batW / 2 + g.r * 0.5) {
+        hit(g.you.x, -1, g.you.v);
+        b.y = g.youY - g.r;
+      } else if (b.vy < 0 && b.py - g.r >= g.aiY + g.batH && b.y - g.r <= g.aiY + g.batH &&
+                 Math.abs(b.x - g.ai.x) <= g.batW / 2 + g.r * 0.5) {
+        hit(g.ai.x, 1, 0);
+        b.y = g.aiY + g.batH + g.r;
+      }
+
+      if (b.y - g.r > t.y + t.h) { point("ai"); return; }
+      if (b.y + g.r < t.y) { point("you"); return; }
+    }
+  }
+
+  // ---------- drawing ----------
+  function roundRect(x, y, w, h, r) {
+    var rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawBat(x, y, w, h, face, down) {
+    var hw = w * 0.16, hh = h * 1.1;
+    ctx.fillStyle = COL.wood;
+    roundRect(x - hw / 2, down ? y + h - 2 : y - hh + 2, hw, hh, hw * 0.4);
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    roundRect(x - w / 2, y + 2.5, w, h, h / 2);
+    ctx.fill();
+    ctx.fillStyle = face;
+    roundRect(x - w / 2, y, w, h, h / 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.14)";
+    roundRect(x - w / 2 + h * 0.35, y + h * 0.2, w - h * 0.7, h * 0.26, h * 0.13);
+    ctx.fill();
+  }
+
+  function draw() {
+    var t = g.t, b = g.ball;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, g.w, g.h);
+
+    ctx.fillStyle = "rgba(0,0,0,.45)";
+    ctx.fillRect(t.x + 3, t.y + 5, t.w, t.h);
+
+    var grad = ctx.createLinearGradient(0, t.y, 0, t.y + t.h);
+    grad.addColorStop(0, COL.tableDeep);
+    grad.addColorStop(0.5, COL.table);
+    grad.addColorStop(1, COL.tableDeep);
+    ctx.fillStyle = grad;
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+
+    var lw = Math.max(2, t.w * 0.012);
+    ctx.strokeStyle = COL.chalk;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(t.x + lw / 2, t.y + lw / 2, t.w - lw, t.h - lw);
+    ctx.lineWidth = Math.max(1, lw * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(t.x + t.w / 2, t.y);
+    ctx.lineTo(t.x + t.w / 2, t.y + t.h);
+    ctx.stroke();
+
+    var nh = Math.max(5, t.h * 0.014);
+    var ny = t.y + t.h / 2 - nh / 2;
+    var over = Math.max(4, t.w * 0.022);
+    ctx.fillStyle = "rgba(20,26,30,.55)";
+    ctx.fillRect(t.x - over, ny, t.w + over * 2, nh);
+    ctx.fillStyle = "rgba(238,242,244,.9)";
+    ctx.fillRect(t.x - over, ny, t.w + over * 2, Math.max(1.5, nh * 0.28));
+    ctx.strokeStyle = "rgba(238,242,244,.35)";
+    ctx.lineWidth = 1;
+    for (var x = t.x - over; x < t.x + t.w + over; x += 7) {
+      ctx.beginPath();
+      ctx.moveTo(x, ny + nh * 0.3);
+      ctx.lineTo(x, ny + nh);
+      ctx.stroke();
+    }
+
+    if (g.flash > 0) {
+      ctx.fillStyle = "rgba(233,114,44," + (0.5 * g.flash) + ")";
+      var fy = g.flashSide === "you" ? t.y + t.h - lw * 3 : t.y;
+      ctx.fillRect(t.x, fy, t.w, lw * 3);
+    }
+
+    drawBat(g.ai.x, g.aiY, g.batW, g.batH, COL.them, false);
+    drawBat(g.you.x, g.youY, g.batW, g.batH, COL.you, true);
+
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.beginPath();
+    ctx.ellipse(b.x + g.r * 0.4, b.y + g.r * 0.55, g.r * 0.95, g.r * 0.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.ball;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, g.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.35)";
+    ctx.beginPath();
+    ctx.arc(b.x - g.r * 0.3, b.y - g.r * 0.32, g.r * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (g.serveIn > 0 && phase === "playing") {
+      ctx.fillStyle = "rgba(238,242,244,.75)";
+      ctx.font = "700 " + Math.round(t.w * 0.085) + "px Helvetica, Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(g.server === "you" ? "Your serve" : "Their serve",
+        t.x + t.w / 2, t.y + t.h * (g.server === "you" ? 0.66 : 0.34));
+    }
+  }
+
+  // ---------- loop ----------
+  var last = 0;
+  function tick(now) {
+    requestAnimationFrame(tick);
+    if (!g) return;
+    if (!last) last = now;
+    var dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (phase === "playing") step(dt);
+    else if (g.flash > 0) g.flash = Math.max(0, g.flash - dt * 2);
+    draw();
+  }
+
+  // ---------- input ----------
+  function aim(clientX) {
+    var rect = cv.getBoundingClientRect();
+    g.you.target = clientX - rect.left;
+  }
+
+  function down(e) {
+    dragging = true;
+    if (e.pointerId !== undefined && cv.setPointerCapture) {
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+    aim(e.clientX !== undefined ? e.clientX : e.touches[0].clientX);
+    e.preventDefault();
+  }
+  function move(e) {
+    if (!dragging) return;
+    aim(e.clientX !== undefined ? e.clientX : e.touches[0].clientX);
+    e.preventDefault();
+  }
+  function up() { dragging = false; }
+
+  if (window.PointerEvent) {
+    cv.addEventListener("pointerdown", down);
+    cv.addEventListener("pointermove", move);
+    cv.addEventListener("pointerup", up);
+    cv.addEventListener("pointercancel", up);
+  } else {
+    cv.addEventListener("touchstart", down, { passive: false });
+    cv.addEventListener("touchmove", move, { passive: false });
+    cv.addEventListener("touchend", up);
+    cv.addEventListener("mousedown", down);
+    cv.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  ovBtn.addEventListener("click", function () {
+    if (phase === "playing") return;
+    if (phase === "paused") { phase = "playing"; paintUI(); return; }
+    startMatch();
+  });
+
+  btnPause.addEventListener("click", function () {
+    if (phase === "playing") phase = "paused";
+    else if (phase === "paused") phase = "playing";
+    paintUI();
+  });
+
+  btnMute.addEventListener("click", function () {
+    muted = !muted;
+    paintUI();
+  });
+
+  var held = {};
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { held[e.key] = true; e.preventDefault(); }
+    if (e.key === " " || e.key === "Enter") {
+      if (phase === "menu" || phase === "over") startMatch();
+      else if (phase === "playing") { phase = "paused"; paintUI(); }
+      else { phase = "playing"; paintUI(); }
+    }
+  });
+  window.addEventListener("keyup", function (e) { held[e.key] = false; });
+  setInterval(function () {
+    if (!g) return;
+    var s = g.t.w * 0.035;
+    if (held.ArrowLeft) g.you.target -= s;
+    if (held.ArrowRight) g.you.target += s;
+  }, 16);
+
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", function () { setTimeout(resize, 200); });
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(resize).observe(court); } catch (e) {}
+  }
+
+  resize();
+  paintUI();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
