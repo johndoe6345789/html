@@ -40,6 +40,8 @@ button{cursor:pointer}
 #trap small{display:block;color:#aab;font-size:12px;font-weight:600;text-align:center}
 #look{position:fixed;left:50%;bottom:calc(58px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);color:#fff;background:var(--plate);padding:4px 12px;border-radius:6px;font-size:13px;opacity:0;transition:opacity .15s}
 #look.show{opacity:1}
+#aiTag{position:fixed;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));color:#0d1014;background:var(--yellow);padding:6px 12px;border-radius:6px;font-size:13px;font-weight:800;opacity:0;transition:opacity .2s;pointer-events:none}
+#aiTag.show{opacity:1}
 #sheet{position:fixed;right:14px;top:calc(14px + env(safe-area-inset-top,0px));width:246px;background:var(--paper);
   border-radius:4px;box-shadow:0 8px 24px rgba(0,0,0,.28);padding:11px 13px 9px;font-size:12px}
 #sheet[hidden]{display:none}
@@ -79,6 +81,7 @@ button{cursor:pointer}
 @media (max-width:640px){.mods{grid-template-columns:1fr}}
 .small{font-size:13.5px;color:var(--muted)}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.row[hidden]{display:none}
 .btn{border:2px solid var(--ink);background:#fff;color:var(--ink);border-radius:6px;padding:8px 14px;font-weight:600}
 .btn:hover{background:#f0eee6}
 .btn[hidden],.primary[hidden]{display:none}
@@ -111,6 +114,7 @@ input[type=range]{width:160px;accent-color:var(--green)}
 <div id="toast"></div>
 <div id="trap"><span id="trapV">0</span> km/h<small>speed trap</small></div>
 <div id="look">Lifesaver check</div>
+<div id="aiTag">AI demo driving — press P to take over</div>
 <aside id="sheet" aria-label="Test report">
   <h2><span style="font-size:14px;color:var(--ink);font-weight:800" id="sheetTitle">Module 1 report</span><span>T hides</span></h2>
   <div class="ex" id="sheetEx"></div>
@@ -128,6 +132,7 @@ input[type=range]{width:160px;accent-color:var(--green)}
       <div class="mod"><h3>Module 1</h3><p>Off-road on the manoeuvring area: slalom and figure of eight, slow ride, U-turn, cornering and controlled stop, emergency stop, and hazard avoidance through the 50 km/h speed trap.</p><button class="primary" id="goM1">Start Module 1</button></div>
       <div class="mod"><h3>Module 2</h3><p>On-road through the village with the examiner following on a bike and talking to you by radio: an angle start, junctions, a roundabout, a normal stop and a pull-up.</p><button class="primary" id="goM2">Start Module 2</button></div>
     </div>
+    <div class="row" id="aiRow"><button class="btn" id="goAI">Watch an AI demo the whole test</button><span class="small">Drives Module 1 then Module 2 on its own, using only the wheel/pedal/indicator/lifesaver controls a rider has. Press P any time to take over, or to hand back to it.</span></div>
     <div class="row" id="pauseRow" hidden><button class="primary" id="resume">Resume</button><button class="btn" id="restart">Restart this module</button><button class="btn" id="quit">Back to module choice</button></div>
  
     <section style="margin-top:18px">
@@ -169,7 +174,7 @@ input[type=range]{width:160px;accent-color:var(--green)}
         <label class="small"><input type="checkbox" id="hintsOn" checked> Show coaching hints</label>
       </div>
     </section>
-    <p class="keys">Automatic bike: no clutch or gears, and it won’t move until you open the throttle. Your foot goes down by itself below walking pace, which counts against you during the slow ride and U-turn.<br>No wheel to hand? Arrow keys or WASD ride, Q and E indicate, Z and C are the left and right lifesavers, T hides the report, Esc pauses.</p>
+    <p class="keys">Automatic bike: no clutch or gears, and it won’t move until you open the throttle. Your foot goes down by itself below walking pace, which counts against you during the slow ride and U-turn.<br>No wheel to hand? Arrow keys or WASD ride, Q and E indicate, Z and C are the left and right lifesavers, T hides the report, P hands control to or from the AI demo rider, Esc pauses.</p>
   </div>
 </div>
 <div id="result" class="ov" hidden>
@@ -320,6 +325,7 @@ const inp={steer:0,thr:0,brk:0,lookL:false,lookR:false}; let padPrev=[];
 function getPad(){const pads=[...(navigator.getGamepads?navigator.getGamepads():[])].filter(Boolean);if(!pads.length)return null;return pads.find(p=>/thrustmaster|044f/i.test(p.id))||pads[0];}
 const pedal=(m,ax)=>{if(!m||ax[m.axis]==null)return 0;const v=clamp((ax[m.axis]-m.rest)/((m.full-m.rest)||1),0,1);return v<.03?0:(v-.03)/.97;};
 function readInput(dt){
+  if(aiDemo&&(state==='drive'||state==='trans')){aiDrive(dt);return null;}
   const gp=getPad(); let s=0,t=0,b=0,lL=false,lR=false;
   if(gp){
     const ax=gp.axes;
@@ -345,6 +351,7 @@ addEventListener('keydown',e=>{
   keys.add(e.code);
   if(state==='drive'&&!e.repeat){if(e.code==='KeyQ')toggleInd('L');if(e.code==='KeyE')toggleInd('R');}
   if(e.code==='KeyT'&&!e.repeat)$('#sheet').hidden=!$('#sheet').hidden;
+  if(e.code==='KeyP'&&!e.repeat&&(state==='drive'||state==='trans'))aiDemo=!aiDemo;
   if(e.code==='Escape'){if(state==='drive'||state==='trans')pause();else if(state==='paused')resume();}
   if(e.code.startsWith('Arrow'))e.preventDefault();
 });
@@ -879,7 +886,224 @@ function nextExercise(){if(m1.i+1>=EXS.length){endModule();return;}transition(()
 let transCb=null,transT=0;
 function transition(cb){state='trans';transCb=cb;transT=.9;$('#fade').className='on';}
 function tickTrans(dt){transT-=dt;if(transT<=0&&transCb){const cb=transCb;transCb=null;cb();$('#fade').className='';state='drive';}}
- 
+
+/* =================== AI DEMO DRIVER ===================
+   Drives through the same controls a person has: inp.steer/thr/brk, the indicator
+   toggle and the two lifesaver-look buttons. It senses only what's already in scope
+   as "surroundings" — the road/route geometry, cones, other traffic, the lights, the
+   pedestrian and the examiner's raised arm — never the fault sheet or bike position by
+   teleport. Every pass/fail judgement still comes from the untouched game logic above. */
+let aiDemo=false;
+const aiHeadingTo=(dx,dy)=>Math.atan2(dx,-dy);
+function aiSteerTo(tx,ty,gain){
+  const dx=tx-bike.x, dy=ty-bike.y;
+  const err=angDiff(aiHeadingTo(dx,dy),bike.h);
+  inp.steer=clamp(err*(gain||1.55)-bike.yaw*.13,-1,1);
+}
+function aiSpeedTo(target){
+  const v=bike.v;
+  const leanCap=Math.abs(bike.lean)>.5?.68:1; // never brake hard enough to crash while still leaned over
+  if(target<=.05){inp.thr=0;inp.brk=v>.05?clamp(v*.55+.3,.35,leanCap):0;return;}
+  const e=target-v;
+  if(e>.08){inp.thr=clamp(e*.5+.06,0,1);inp.brk=0;}
+  else if(e<-.08){inp.thr=0;inp.brk=clamp(-e*.42,0,leanCap);}
+  else{inp.thr=.12;inp.brk=0;}
+}
+function aiAdvance(path,idx,r){
+  while(idx<path.length-1){
+    const p=path[idx], q=path[idx+1];
+    const dx=q.x-p.x,dy=q.y-p.y,len2=dx*dx+dy*dy||1;
+    const t=((bike.x-p.x)*dx+(bike.y-p.y)*dy)/len2;
+    const dist=Math.hypot(p.x-bike.x,p.y-bike.y);
+    if(t>1||dist<r)idx++; else break;
+  }
+  return idx;
+}
+function aiCircle(cx,cy,r,a0,a1,steps,v){
+  const out=[]; for(let k=0;k<=steps;k++){const a=a0+(a1-a0)*k/steps;out.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a),v});} return out;
+}
+function aiSetInd(want){ // want: 'L'|'R'|null — edge-triggered, mirrors pressing the indicator button
+  const have=indL?'L':indR?'R':null;
+  if(want===have)return;
+  if(have)toggleInd(have); // cancel first
+  if(want)toggleInd(want);
+}
+/* ---- Module 1: build (and cache) a waypoint path for each exercise, {x,y,v} ---- */
+const AIP={};
+function aiBuildPath(key){
+  if(key==='sl'){
+    const pts=[]; const side=[1,-1,1,-1,1];
+    SL.forEach((c,i)=>pts.push({x:c.x+side[i]*3.1,y:c.y,v:2.6}));
+    pts.push({x:-20,y:-49,v:2.6});
+    const rC=F8[1].x, lC=F8[0].x, Y=F8[0].y, rr=5.6;
+    // each loop is tangent to the y=Y line at its own ends, so a bump clearly north of
+    // it between loops is needed — otherwise the path only kisses the line and the
+    // game's crossing counter (a sign change either side of Y) never actually fires
+    const bump={x:-20,y:Y+4,v:2.7};
+    const loops=[
+      ()=>aiCircle(rC,Y,rr,Math.PI,-Math.PI,20,2.7),
+      ()=>aiCircle(lC,Y,rr,0,-2*Math.PI,20,2.7),
+      ()=>aiCircle(rC,Y,rr,Math.PI,-Math.PI,20,2.7),
+      ()=>aiCircle(lC,Y,rr,0,-2*Math.PI,20,2.7)];
+    loops.forEach((fn,i)=>{pts.push(...fn()); if(i<loops.length-1)pts.push(bump);});
+    pts.push({x:-20,y:-49,v:0});
+    return pts;
+  }
+  if(key==='slow'){ // the stop cone sits at (0,-39) — pull up just short of it, not on it
+    return [{x:0,y:-2,v:1.9},{x:0,y:-9,v:1.9},{x:0,y:-30,v:1.9},{x:0,y:-33,v:1.9},{x:0,y:-37.3,v:0}];
+  }
+  if(key==='ut'){
+    const cx=0, cy=-56.1, r=2.75;
+    const pts=[{x:0,y:-58.9,v:2.2},{x:.3,y:-58.85,v:2.2}];
+    pts.push(...aiCircle(cx,cy,r,-Math.PI/2,Math.PI/2,18,2.2));
+    pts.push({x:-1.2,y:cy+r,v:0});
+    return pts;
+  }
+  if(key==='cs'){
+    const pts=[{x:20,y:-32,v:9},{x:20,y:-127,v:9}];
+    pts.push(...aiCircle(ARC.cx,ARC.cy,ARC.r,0,-Math.PI/2,24,8));
+    pts.push({x:-22,y:-160,v:8},{x:-33,y:-160,v:3.2},{x:-37,y:-160,v:3},{x:-41.6,y:-160,v:0});
+    return pts;
+  }
+  if(key==='es'){
+    const pts=[{x:20,y:-32,v:9},{x:20,y:-127,v:14}];
+    pts.push(...aiCircle(ARC.cx,ARC.cy,ARC.r,0,-Math.PI/2,24,15));
+    pts.push({x:-14,y:-160,v:16},{x:-20,y:-160,v:16},{x:-40,y:-160,v:16});
+    return pts;
+  }
+  if(key==='av'){
+    const pts=[{x:20,y:-32,v:9},{x:20,y:-127,v:14}];
+    pts.push(...aiCircle(ARC.cx,ARC.cy,ARC.r,0,-Math.PI/2,24,15));
+    pts.push({x:-14,y:-160,v:14},{x:-19,y:-160,v:14},{x:-22.5,y:-162,v:14},{x:-26,y:-162,v:14});
+    // a bike doing 14 m/s has a wide turning circle (needs the whole lane just to correct
+    // a couple of metres), so brake hard the moment it's clear of the obstacle and only
+    // ask for a small, easy correction back to the centre line at each lower speed
+    pts.push({x:-29,y:-161.6,v:8},{x:-33,y:-160.6,v:4.5},{x:-40,y:-160.1,v:1.5},{x:-48,y:-160,v:0});
+    return pts;
+  }
+  return [{x:bike.x,y:bike.y,v:0}];
+}
+function aiPathFor(key){ if(!AIP[key])AIP[key]=aiBuildPath(key); return AIP[key]; }
+let aiM1Key=null, aiM1Idx=0;
+function aiDriveM1(dt){
+  const e=EXS[m1.i];
+  if(aiM1Key!==e.key){aiM1Key=e.key;aiM1Idx=0;}
+  // right lifesaver + pause before every move-off, mirroring the generic rule the game enforces
+  if(moveOff&&bike.v<.3&&lastLook.R<moveOff.at){inp.lookL=false;inp.lookR=true;inp.thr=0;inp.brk=.2;inp.steer=0;return;}
+  inp.lookR=false;
+  if(e.key==='ut'&&!m1.s.turning&&clock-lastLook.R>1.2&&bike.odo<1.2){inp.lookL=false;inp.lookR=true;}
+  if(e.key==='es'&&m1.exam.arm){ // examiner's arm is up: brake hard and hold the line.
+    aiSpeedTo(0); inp.thr=0; inp.steer=0; // hands off the bars — any active correction here
+    if(Math.abs(bike.lean)<.3)inp.brk=1;  // just adds steering input the fault sheet counts;
+    return;                               // the bike settles straight on its own in time
+  }
+  const path=aiPathFor(e.key);
+  aiM1Idx=aiAdvance(path,aiM1Idx,e.key==='sl'?1.05:1.4);
+  const t=path[aiM1Idx];
+  let brakeGate=false;
+  if(e.key==='av'&&bike.x>-26)brakeGate=true; // never brake before the obstacle
+  aiSteerTo(t.x,t.y);
+  if(t.v<=0){ // a "stop exactly here" waypoint — brake by remaining distance, not all at
+    const d=Math.hypot(t.x-bike.x,t.y-bike.y); // once, or it stops the moment this becomes
+    if(d<1.5){inp.thr=0;inp.brk=1;}            // the target however far off it still is
+    else aiSpeedTo(clamp(Math.sqrt(Math.max(0,2*2.2*d)),0,3));
+  } else aiSpeedTo(t.v);
+  if(brakeGate)inp.brk=0;
+}
+/* ---- Module 2: follow the route the game already built, offset into the left lane ---- */
+let aiM2LookAhead=7.5;
+const AISIG2=[{at:()=>P.E+15,dir:'L'},{at:()=>P.A+3,dir:'L'}]; // indicate left approaching each pull-up
+function aiGateSpeed(pp,dist,unsafe,cruise){ // returns a speed cap if this gate should hold the bike back
+  if(dist<0||dist>45)return null;
+  if(!unsafe())return null;
+  if(dist<4)return 0; // the fault fires the instant we cross the line if it's unsafe *then* —
+  return clamp(Math.sqrt(Math.max(0,2*3*dist)),0,cruise); // crawling through isn't good enough, stop
+}
+let dbgLaneOffset=0,dbgTx=0,dbgTy=0,dbgLocD=0;
+let lookTimer={i:-1,t:0}; // caps how long a lifesaver look is held, per LSWIN window
+function aiDriveM2(dt){
+  if(moveOff&&bike.v<.3&&lastLook.R<moveOff.at){inp.lookL=false;inp.lookR=true;inp.thr=0;inp.brk=.2;inp.steer=0;return;}
+  const loc=locate(bike.x,bike.y,locHint);
+  dbgLocD=loc.d;
+  const pp=((prog%R.L)+R.L)%R.L;
+  const cruiseLimit=(limitAt(pp)-3)/MPH;
+  let cruise=cruiseLimit;
+  const nearJunc=[P.B,P.C,P.A,P.ringGive].some(p=>{let d=p-prog;if(d<0)d+=R.L;return d<22&&d>-4;});
+  const onRing=Math.hypot(bike.x-RC.x,bike.y-RC.y)<RR+8; // covers the ring itself and its exit curve
+  const tightTurn=nearJunc||onRing;
+  if(tightTurn)cruise=Math.min(cruise,4.3); // a fast bike just can't track a tight curve
+  // the lights can turn red right as we arrive — approach cautiously well before the gate
+  // below would otherwise only react once that's already happened
+  {let d=P.lights-prog;if(d<0)d+=R.L;if(d>=0&&d<55)cruise=Math.min(cruise,6.5);}
+  // gates: give-way lines, the lights, and the zebra — hold back like the fault checks the
+  // game already runs. Each fault fires a little *before* the named point (the game checks
+  // at P.lights-1.5, P.zebra-2, and so on), so the gate has to stop a bit earlier still, or
+  // slowing "to" the exact point means crossing the real line before we're actually slow
+  const gates=[
+    {at:P.giveB-2,unsafe:()=>AI.some(c=>c.wait<=0&&c.x>-5&&c.x<60&&c.x/Math.max(c.v,1)<3.2)},
+    {at:P.lights-3.5,unsafe:()=>lightState()!=='green'},
+    {at:P.ringGive-2,unsafe:()=>RING.some(c=>((270-c.a)%360+360)%360<62&&c.v>2)},
+    {at:P.zebra-3.5,unsafe:()=>ped.state==='cross'&&ped.x>-5&&ped.x<5}
+  ];
+  let holdSpeed=null;
+  for(const g of gates){let d=g.at-prog;if(d<0)d+=R.L;if(d>R.L/2)d-=R.L;
+    const cap=aiGateSpeed(pp,d,g.unsafe,cruise); if(cap!=null)holdSpeed=holdSpeed==null?cap:Math.min(holdSpeed,cap);}
+  let target=holdSpeed!=null?holdSpeed:cruise;
+  let laneOffset=1.8;
+  // both parked cars sit at the same ~1.75m offset our cruising lane uses, so swing out
+  // around each — the window has to be wider than it looks close because the steering
+  // target itself is several metres further up the road than the bike's own progress.
+  // near PARK0 the bike starts only 0.75m further out than the car, and has next to no
+  // yaw authority yet at near-zero speed, so it needs a short, sharp lookahead to turn
+  // in time rather than the usual long one a settled cruise uses
+  let lookAheadOverride=null;
+  {let d=8-prog;if(d<0)d+=R.L;if(d>R.L/2)d-=R.L;
+    if(Math.abs(d)<13){laneOffset=0;target=Math.min(target,5.5);lookAheadOverride=3.2;}}
+  {let d=P.parked-prog;if(d<0)d+=R.L;if(d>R.L/2)d-=R.L;
+    if(Math.abs(d)<13){laneOffset=-1.3;target=Math.min(target,5.5);}}
+  // the two commanded stops: pull in toward the kerb well past the trigger point (the
+  // game only starts its stopped-timer once you're 8m past it), hold, and look first —
+  // briefly, on its own timer, same as the lifesaver windows below
+  const stopping=(ns.askedAt!=null&&!ns.done)||(ns.pullAt!=null&&!finished);
+  let stopLookWant=false;
+  if(stopping){
+    const trigger=ns.pullAt!=null?ns.pullAt:ns.askedAt, stopPt=trigger+10;
+    let d=stopPt-prog; if(d<0)d+=R.L; if(d>R.L/2)d-=R.L;
+    laneOffset=2.5; target=Math.min(target,clamp(Math.sqrt(Math.max(0,2*2.6*Math.max(d,0))),0,target));
+    // the final pull-up only counts a lifesaver from 8m past its own trigger point onward
+    // (not the mid-route stop, which accepts one any time it's waiting) — hold there instead
+    stopLookWant=ns.pullAt!=null?(prog>ns.pullAt+8&&d<15):d<15;
+    if(d<=0.4)target=0;
+  }
+  // lifesavers: a real glance is brief — hold for under a second once due (long enough
+  // to register) rather than the whole approach, or it reads as "looked behind for too
+  // long while moving"
+  let look=null, winI=stopLookWant?-2:-1;
+  if(!stopLookWant)LSWIN.forEach((w,i)=>{if(prog>=w.from&&prog<=w.to){look=w.dir;winI=i;}});
+  else look='L';
+  if(winI!==lookTimer.i){lookTimer.i=winI;lookTimer.t=0;}
+  if(winI!==-1)lookTimer.t+=dt;
+  const holding=winI!==-1&&lookTimer.t<0.9;
+  inp.lookL=look==='L'&&holding;
+  inp.lookR=look==='R'&&holding;
+  // indicators: on for the signal windows, plus a courtesy left signal into each stop
+  let ind=null;
+  for(const w of SIGWIN)if(prog>=w.from-4&&prog<=w.to){ind=w.dir;break;}
+  if(!ind)for(const w of AISIG2){let d=w.at()-prog;if(d<0)d+=R.L;if(d>=0&&d<18)ind=w.dir;}
+  aiSetInd(ind);
+  const baseLA=tightTurn?clamp(3+bike.v*.2,3,6.5):clamp(aiM2LookAhead+bike.v*.35,6,16);
+  const la=lookAheadOverride!=null?lookAheadOverride:baseLA;
+  const q=ptAtProg(prog+la);
+  const tx=q.x+q.dy*laneOffset, ty=q.y-q.dx*laneOffset;
+  dbgLaneOffset=laneOffset;dbgTx=tx;dbgTy=ty;
+  aiSteerTo(tx,ty,lookAheadOverride!=null?2.4:(tightTurn?1.7:1.3));
+  aiSpeedTo(target);
+}
+function aiDrive(dt){
+  inp.lookL=inp.lookL||false; inp.lookR=inp.lookR||false;
+  if(mode==='m1')aiDriveM1(dt); else aiDriveM2(dt);
+}
+
 /* =================== RESULTS =================== */
 function endModule(){
   let m=0,s=0,d=0;CATS.forEach(([k])=>{m+=F[k].m;s+=F[k].s;d+=F[k].d;});
@@ -890,6 +1114,7 @@ function endModule(){
   $('#next').hidden=!(mode==='m1'&&pass);
   state='result'; $('#result').hidden=false; instruct(`That’s the end of ${name}.`,'');
   ($('#next').hidden?$('#again'):$('#next')).focus();
+  if(aiDemo&&mode==='m1'&&pass)setTimeout(()=>{if(aiDemo&&state==='result')startModule('m2');},2600);
 }
  
 /* =================== 3D SCENE (plan x → X, plan y → Z, up = Y) =================== */
@@ -1180,6 +1405,7 @@ function hud(dt){
   $('#ffbSrc').textContent=outs.length?outs.join(' and '):'on-screen only';
   if(toastTimer>0){toastTimer-=dt;if(toastTimer<=0)$('#toast').className='';}
   if(trapTimer>0){trapTimer-=dt;if(trapTimer<=0)$('#trap').className='';}
+  $('#aiTag').className=aiDemo&&(state==='drive'||state==='trans')?'show':'';
 }
 let axEls=[];
 function setupPanel(gp){
@@ -1224,8 +1450,9 @@ function startModule(m){
 function pause(){state='paused';$('#setup').hidden=false;$('#mods').hidden=true;$('#pauseRow').hidden=false;if('speechSynthesis' in window)speechSynthesis.cancel();$('#resume').focus();}
 function resume(){$('#setup').hidden=true;state=transCb?'trans':'drive';cal=null;$('#calSkip').hidden=true;}
 function toChoice(){$('#result').hidden=true;state='setup';$('#setup').hidden=false;$('#mods').hidden=false;$('#pauseRow').hidden=true;transCb=null;$('#fade').className='';}
-$('#goM1').onclick=()=>startModule('m1');
-$('#goM2').onclick=()=>startModule('m2');
+$('#goM1').onclick=()=>{aiDemo=false;startModule('m1');};
+$('#goM2').onclick=()=>{aiDemo=false;startModule('m2');};
+$('#goAI').onclick=()=>{aiDemo=true;startModule('m1');};
 $('#resume').onclick=resume;
 $('#restart').onclick=()=>{transCb=null;$('#mods').hidden=false;$('#pauseRow').hidden=true;startModule(mode);};
 $('#quit').onclick=toChoice;
@@ -1249,6 +1476,19 @@ function syncPrefs(){
 syncPrefs();
 mode='m1'; setCats(CATS_M1); startExercisePreview();
 function startExercisePreview(){placeBike(EXS[0].start[0],EXS[0].start[1],EXS[0].start[2]);const ep=EXAMPOS.sl;m1.exam.x=ep[0];m1.exam.y=ep[1];}
+if(/aitest/.test(location.search)){ // headless test hook only; never runs for a real visitor
+  window.__T={
+    get state(){return state;}, get mode(){return mode;}, get bike(){return bike;}, get F(){return F;},
+    get LOG(){return LOG;}, get m1(){return m1;}, get prog(){return prog;}, get finished(){return typeof finished!=='undefined'?finished:null;},
+    get inp(){return inp;}, get exam(){return typeof exam!=='undefined'?exam:null;},
+    get aiIdx(){return aiM1Idx;}, get aiKey(){return aiM1Key;}, get aiPath(){return aiPathFor(EXS[m1.i].key);},
+    get moveOff(){return moveOff;}, get lastLook(){return lastLook;}, get lookHeld(){return lookHeld;}, get clock(){return clock;},
+    get PARK0(){return typeof PARK0!=='undefined'?PARK0:null;}, get PARKED(){return typeof PARKED!=='undefined'?PARKED:null;}, get AI(){return typeof AI!=='undefined'?AI:null;},
+    get dbgLaneOffset(){return dbgLaneOffset;}, get dbgTx(){return dbgTx;}, get dbgTy(){return dbgTy;}, get dbgLocD(){return dbgLocD;},
+    step(dt){readInput(dt);if(state==='drive'){if(mode==='m1')tickM1(dt);else tickM2(dt);}else if(state==='trans')tickTrans(dt);},
+    start(m){aiDemo=true;startModule(m);}, setAI(v){aiDemo=v;}
+  };
+}
 requestAnimationFrame(frame);
 })();
 </script>
